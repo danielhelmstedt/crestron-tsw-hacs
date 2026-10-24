@@ -3,63 +3,21 @@
 import logging
 
 import aiohttp
-import probatio
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import (
     async_create_clientsession,
     async_get_clientsession,
 )
-from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_USE_WEBSOCKET, DOMAIN, PLATFORMS
 from .coordinator import CrestronDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register admin-only camera stream services."""
-
-    async def async_set_camera_stream(
-        call: ServiceCall, enabled: bool
-    ) -> dict[str, str | bool]:
-        config_entry = hass.config_entries.async_get_entry(call.data["config_entry_id"])
-        if config_entry is None or config_entry.domain != DOMAIN:
-            raise HomeAssistantError("Crestron config entry not found")
-        coordinator = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
-        if coordinator is None:
-            raise HomeAssistantError("Crestron config entry is not loaded")
-        return await coordinator.async_set_camera_stream(enabled)
-
-    async def async_enable_camera_stream(call: ServiceCall) -> dict[str, str | bool]:
-        return await async_set_camera_stream(call, True)
-
-    async def async_disable_camera_stream(call: ServiceCall) -> dict[str, str | bool]:
-        return await async_set_camera_stream(call, False)
-
-    async_register_admin_service(
-        hass,
-        DOMAIN,
-        "enable_camera_stream",
-        async_enable_camera_stream,
-        schema=probatio.Schema({probatio.Required("config_entry_id"): str}),
-        supports_response=SupportsResponse.ONLY,
-    )
-    async_register_admin_service(
-        hass,
-        DOMAIN,
-        "disable_camera_stream",
-        async_disable_camera_stream,
-        schema=probatio.Schema({probatio.Required("config_entry_id"): str}),
-        supports_response=SupportsResponse.ONLY,
-    )
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
