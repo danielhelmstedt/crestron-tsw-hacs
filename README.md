@@ -69,7 +69,7 @@ The RTSP stream is available at <rtsp://IP_ADDRESS:8554/camera.sdp>.
 
 ## Support
 
-If you encounter any issues, please open an issue on the [GitHub repository](https://github.com/danielhelmstedt/crestron-tsw-hacs.
+If you encounter any issues, please open an issue on the [GitHub repository](https://github.com/danielhelmstedt/crestron-tsw-hacs).
 
 ## License
 
