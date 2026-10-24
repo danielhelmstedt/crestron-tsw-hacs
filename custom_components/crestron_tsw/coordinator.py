@@ -142,10 +142,11 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
 
         return self.data
 
-    def async_start_illumination_poll(self) -> None:
+    def async_start_illumination_poll(self, config_entry) -> None:
         """Start polling the illumination join independently of API updates."""
         if self.username and self.password and self._illumination_task is None:
-            self._illumination_task = self.hass.async_create_task(
+            self._illumination_task = config_entry.async_create_background_task(
+                self.hass,
                 self._async_illumination_loop(),
                 "crestron_tsw illumination polling",
             )
@@ -228,11 +229,13 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
 
         raise aiohttp.ClientError("Crestron authentication failed after retry")
 
-    def async_start_websocket(self) -> None:
+    def async_start_websocket(self, config_entry) -> None:
         """Start receiving device updates over WebSocket when authenticated."""
         if self.username and self.password and self._websocket_task is None:
-            self._websocket_task = self.hass.async_create_task(
-                self._async_websocket_loop(), "crestron_tsw websocket listener"
+            self._websocket_task = config_entry.async_create_background_task(
+                self.hass,
+                self._async_websocket_loop(),
+                "crestron_tsw websocket listener",
             )
 
     async def _async_websocket_loop(self) -> None:

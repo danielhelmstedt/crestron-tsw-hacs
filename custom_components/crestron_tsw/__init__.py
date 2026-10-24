@@ -43,9 +43,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
     await coordinator.async_config_entry_first_refresh()
     hass.data[DOMAIN][config_entry.entry_id] = coordinator
-    coordinator.async_start_illumination_poll()
+    coordinator.async_start_illumination_poll(config_entry)
     if config_entry.data.get(CONF_USE_WEBSOCKET, True):
-        coordinator.async_start_websocket()
+        coordinator.async_start_websocket(config_entry)
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
     return True
 
