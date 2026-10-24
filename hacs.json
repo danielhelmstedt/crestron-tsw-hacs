@@ -1,6 +1,6 @@
 {
-    "name": "Crestron TSW-760",
+    "name": "Crestron TSW",
     "content_in_root": false,
     "iot_class": "Local Polling",
-    "domains": ["number", "sensor", "switch", "text"]
+    "domains": ["button", "number", "select", "sensor", "switch", "text"]
   }

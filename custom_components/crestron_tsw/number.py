@@ -1,9 +1,6 @@
 """Number Component."""
 
-import json
 import logging
-
-import aiohttp
 
 from homeassistant.components.number import NumberEntity
 
@@ -17,16 +14,18 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the Crestron Number platform."""
 
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    name = config_entry.data.get("name", "default_name")
     entities = [
         CrestronNumber(
             coordinator,
-            f"{name} {entity['name']}",
+            entity["name"],
             entity["value_path"],
             entity["native_min_value"],
             entity["native_max_value"],
-            f"{name}_{entity['name']}".replace(" ", "_").lower(),
+            entity["name"].replace(" ", "_").lower(),
             config_entry,
+            entity.get("icon"),
+            entity.get("device_class"),
+            entity.get("native_unit_of_measurement"),
         )
         for entity in ENTITIES_TO_EXPOSE
         if entity["type"] == "number"
@@ -46,9 +45,20 @@ class CrestronNumber(CrestronEntity, NumberEntity):
         native_max_value,
         entity_id,
         config_entry,
+        icon,
+        device_class,
+        native_unit_of_measurement,
     ):
         """Initialize the CrestronNumber entity."""
-        super().__init__(coordinator, name, value_path, entity_id, config_entry)
+        super().__init__(
+            coordinator,
+            name,
+            value_path,
+            entity_id,
+            config_entry,
+            icon=icon,
+            device_class=device_class,
+        )
         self._attr_name = name
         self._entity_id = entity_id
         self._value_path = value_path
@@ -56,6 +66,8 @@ class CrestronNumber(CrestronEntity, NumberEntity):
         # Assign the min and max values specific to CrestronNumber
         self._attr_native_min_value = native_min_value
         self._attr_native_max_value = native_max_value
+        if native_unit_of_measurement is not None:
+            self._attr_native_unit_of_measurement = native_unit_of_measurement
 
     @property
     def unique_id(self):
@@ -85,24 +97,12 @@ class CrestronNumber(CrestronEntity, NumberEntity):
 
     async def async_set_native_value(self, native_value: float) -> None:
         """Docstring."""
-        url = f"http://{self.coordinator.host}/Device"
         payload = self._create_payload(native_value)
-        try:
-            _LOGGER.debug(
-                "Setting native_value for %s to %s", self._attr_name, native_value
-            )
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(url, json=payload) as response,
-            ):
-                response.raise_for_status()
-                response_text = await response.text()
-                response_data = json.loads(response_text, strict=False)
-                _LOGGER.debug("Set native_value response: %s", response_data)
-                await self._handle_response(response_data)
-
-        except aiohttp.ClientError:
-            _LOGGER.exception("Failed to set native_value for %s", self._attr_name)
+        _LOGGER.debug(
+            "Setting native_value for %s to %s", self._attr_name, native_value
+        )
+        response_data = await self.coordinator.async_post_api("/Device", payload)
+        _LOGGER.debug("Set native_value response: %s", response_data)
 
     def _create_payload(self, native_value: float):
         payload = {}
@@ -113,13 +113,3 @@ class CrestronNumber(CrestronEntity, NumberEntity):
             current_native_value = current_native_value[key]
         previous_native_value[self.value_path[-1]] = native_value
         return payload
-
-    async def _handle_response(self, response_data):
-        for action in response_data.get("Actions", []):
-            for result in action.get("Results", []):
-                if result.get("StatusId") != 0:
-                    _LOGGER.exceptiom(
-                        "Failed to set property %s. Error: %s",
-                        result.get("Property"),
-                        result.get("StatusInfo"),
-                    )

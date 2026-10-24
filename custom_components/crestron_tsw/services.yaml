@@ -1,0 +1,21 @@
+enable_camera_stream:
+  name: Enable camera stream
+  description: Enable the panel's camera RTSP stream over SSH.
+  fields:
+    config_entry_id:
+      name: Panel
+      required: true
+      selector:
+        config_entry:
+          integration: crestron_tsw
+
+disable_camera_stream:
+  name: Disable camera stream
+  description: Disable the panel's camera RTSP stream over SSH.
+  fields:
+    config_entry_id:
+      name: Panel
+      required: true
+      selector:
+        config_entry:
+          integration: crestron_tsw

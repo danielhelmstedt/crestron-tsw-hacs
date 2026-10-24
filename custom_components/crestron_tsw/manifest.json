@@ -1,0 +1,16 @@
+{
+    "domain": "crestron_tsw",
+    "name": "Crestron TSW",
+    "version": "1.2",
+    "documentation": "https://github.com/danielhelmstedt/crestron-tsw-hacs",
+    "dependencies": [],
+    "codeowners": [
+        "@danielhelmstedt"
+    ],
+    "requirements": [
+        "aiohttp>=3.7.4",
+        "asyncssh==2.24.0"
+    ],
+    "iot_class": "local_polling",
+    "config_flow": true
+}
