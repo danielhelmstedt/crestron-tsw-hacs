@@ -3,11 +3,14 @@
 import logging
 
 import aiohttp
+import probatio
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import (
     async_create_clientsession,
     async_get_clientsession,
@@ -18,6 +21,34 @@ from .const import CONF_USE_WEBSOCKET, DOMAIN, PLATFORMS
 from .coordinator import CrestronDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+SET_LIGHT_BAR_SCHEMA = probatio.Schema(
+    {
+        probatio.Required("entry_id"): cv.string,
+        probatio.Optional("enabled", default=True): cv.boolean,
+        probatio.Optional("rgb_color"): probatio.ExactSequence(
+            [cv.byte, cv.byte, cv.byte]
+        ),
+        probatio.Optional("brightness"): cv.byte,
+    }
+)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the light-bar service once for all entries."""
+
+    async def async_set_light_bar(call: ServiceCall) -> None:
+        coordinator = hass.data.get(DOMAIN, {}).get(call.data["entry_id"])
+        if coordinator is None:
+            raise HomeAssistantError("The selected Crestron panel is not loaded")
+        await coordinator.async_set_light_bar(
+            call.data["enabled"], call.data.get("rgb_color"), call.data.get("brightness")
+        )
+
+    hass.services.async_register(
+        DOMAIN, "set_light_bar", async_set_light_bar, schema=SET_LIGHT_BAR_SCHEMA
+    )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
