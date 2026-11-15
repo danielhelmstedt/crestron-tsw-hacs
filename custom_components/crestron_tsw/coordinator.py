@@ -6,6 +6,7 @@ from datetime import timedelta
 import json
 import logging
 import re
+from urllib.parse import urlsplit
 
 import aiohttp
 import asyncssh
@@ -18,6 +19,11 @@ from .const import ILLUMINATION_JOIN, ILLUMINATION_UPDATE_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 EXCLUDED_KEYS = ["CertificateStore", "Ieee8021x"]
+LIGHT_BAR_JOINS = (
+    ("RED", 33354, 30025),
+    ("GREEN", 33355, 30026),
+    ("BLUE", 33356, 30027),
+)
 
 
 def filter_response_data(data, excluded_keys):
@@ -102,6 +108,7 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
         self._ssh_connection = None
         self._ssh_process = None
         self._ssh_command_lock = asyncio.Lock()
+        self._light_bar_lock = asyncio.Lock()
         self._websocket_task = None
         self._illumination_task = None
         super().__init__(
@@ -137,10 +144,31 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
                 self.data[
                     "camera_stream_is_on"
                 ] = await self.async_camera_stream_is_on()
-            except asyncssh.Error, HomeAssistantError, OSError, TimeoutError:
+            except (asyncssh.Error, HomeAssistantError, OSError, TimeoutError):
                 _LOGGER.debug("Unable to read camera stream status from %s", self.host)
 
+        if self.username and self.password and self._light_bar_connected():
+            async with self._light_bar_lock:
+                try:
+                    self.data["light_bar"] = await self._async_read_light_bar_channels()
+                except (asyncssh.Error, HomeAssistantError, OSError, TimeoutError) as err:
+                    self.data.pop("light_bar", None)
+                    _LOGGER.warning(
+                        "Unable to read light bar from %s: %s", self.host, err
+                    )
+
         return self.data
+
+    def _light_bar_connected(self) -> bool:
+        """Check the API's USB accessory capability before using its joins."""
+        accessory = get_nested_value(
+            self.data, ["Device", "UsbSchedulingPanelAccessory"], {}
+        )
+        return (
+            isinstance(accessory, dict)
+            and accessory.get("IsCrestronAccessoryConnected") is True
+            and str(accessory.get("AccessoryType", "")).upper() == "LIGHTBAR"
+        )
 
     def async_start_illumination_poll(self, config_entry) -> None:
         """Start polling the illumination join independently of API updates."""
@@ -158,7 +186,7 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
             poll_started = loop.time()
             try:
                 value = await self.async_get_analog_join(ILLUMINATION_JOIN)
-            except asyncssh.Error, HomeAssistantError, OSError, TimeoutError:
+            except (asyncssh.Error, HomeAssistantError, OSError, TimeoutError):
                 _LOGGER.debug("Unable to read illumination join from %s", self.host)
             else:
                 if value != self.data.get("illumination"):
@@ -214,18 +242,43 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
                 request_kwargs["json"] = payload
 
             async with self.session.request(
-                method, f"{self.base_url}{path}", **request_kwargs
+                method, f"{self.base_url}{path}", allow_redirects=False, **request_kwargs
             ) as response:
-                if response.status == 403 and self.username and attempt == 0:
+                login_redirect = (
+                    response.status in (301, 302, 303, 307, 308)
+                    and urlsplit(response.headers.get("Location", "")).path
+                    == "/userlogin.html"
+                )
+                if self.username and (response.status in (401, 403) or login_redirect):
                     self.xsrf_token = None
                     self.session.cookie_jar.clear()
+                    if attempt:
+                        raise HomeAssistantError(
+                            "Crestron authentication failed after retry; "
+                            "check the panel credentials"
+                        )
                     continue
                 response.raise_for_status()
+                if 300 <= response.status < 400:
+                    raise HomeAssistantError(
+                        f"Crestron API {method} {path} returned an unexpected "
+                        f"HTTP {response.status} redirect"
+                    )
                 response_text = await response.text()
                 _LOGGER.debug("Received device response: %s", response_text)
-                if not response_text:
-                    return {}
-                return json.loads(response_text.removeprefix("\ufeff"), strict=False)
+                try:
+                    data = json.loads(
+                        response_text.removeprefix("\ufeff"), strict=False
+                    )
+                except json.JSONDecodeError as err:
+                    raise HomeAssistantError(
+                        f"Crestron API {method} {path} returned invalid JSON"
+                    ) from err
+                if not isinstance(data, dict):
+                    raise HomeAssistantError(
+                        f"Crestron API {method} {path} did not return a JSON object"
+                    )
+                return data
 
         raise aiohttp.ClientError("Crestron authentication failed after retry")
 
@@ -338,7 +391,7 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
         """Read a Crestron digital join from the panel console."""
         response = await self._async_ssh_run(f"GETDIGITALJOIN {join_number}")
         values = re.findall(
-            r"(?:value\s*[:=]\s*)?(on|off|true|false|0|1)\b",
+            r"\bDIGITAL\s*=\s*(0|1)\b",
             response,
             re.IGNORECASE,
         )
@@ -346,7 +399,92 @@ class CrestronDataUpdateCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError(
                 f"Unexpected digital join response for {join_number}: {response.strip()}"
             )
-        return values[-1].casefold() in {"on", "true", "1"}
+        return values[-1] == "1"
+
+    async def _async_read_light_bar_channels(self) -> dict:
+        """Read the USB light-bar analog and digital joins."""
+        channels = {}
+        for color, analog_join, digital_join in LIGHT_BAR_JOINS:
+            brightness = await self.async_get_analog_join(analog_join)
+            if not 0 <= brightness <= 100 or not brightness.is_integer():
+                raise HomeAssistantError(
+                    f"Unexpected USB light-bar brightness for {color}: {brightness}"
+                )
+            channels[color] = {
+                "brightness": int(brightness),
+                "control": int(await self.async_get_digital_join(digital_join)),
+            }
+        return channels
+
+    async def async_set_light_bar(
+        self,
+        enabled: bool,
+        rgb_color: tuple[int, int, int] | list[int] | None = None,
+        brightness: int | None = None,
+    ) -> None:
+        """Set USB accessory joins and verify their readback."""
+        async with self._light_bar_lock:
+            try:
+                if (
+                    not self.username
+                    or not self.password
+                    or not self._light_bar_connected()
+                ):
+                    raise HomeAssistantError(
+                        "A connected USB light bar and SSH credentials are required"
+                    )
+                current = await self._async_read_light_bar_channels()
+                levels = [
+                    current[color]["brightness"] for color, _, _ in LIGHT_BAR_JOINS
+                ]
+                if enabled:
+                    is_on = any(
+                        current[color]["control"] and current[color]["brightness"]
+                        for color, _, _ in LIGHT_BAR_JOINS
+                    )
+                    active_levels = [
+                        current[color]["brightness"]
+                        if not is_on or current[color]["control"]
+                        else 0
+                        for color, _, _ in LIGHT_BAR_JOINS
+                    ]
+                    rgb = rgb_color if rgb_color is not None else active_levels
+                    if rgb_color is None and not max(rgb):
+                        rgb = (255, 255, 255)
+                    peak = max(rgb)
+                    level = (
+                        brightness / 255 * 100
+                        if brightness is not None
+                        else max(active_levels) or 100
+                    )
+                    levels = [
+                        max(1, round(value / peak * level))
+                        if value and peak and level
+                        else 0
+                        for value in rgb
+                    ]
+                expected = {}
+                for (color, analog_join, digital_join), level in zip(
+                    LIGHT_BAR_JOINS, levels, strict=True
+                ):
+                    control = int(enabled and level > 0)
+                    if enabled:
+                        await self._async_ssh_run(f"SETANALOGJOIN {analog_join} {level}")
+                    await self._async_ssh_run(f"SETDIGITALJOIN {digital_join} {control}")
+                    expected[color] = {"brightness": level, "control": control}
+                actual = await self._async_read_light_bar_channels()
+                if actual != expected:
+                    raise HomeAssistantError(
+                        "Panel light-bar feedback did not match the requested settings"
+                    )
+                updated_data = self.data.copy()
+                updated_data["light_bar"] = actual
+                self.async_set_updated_data(updated_data)
+            except (asyncssh.Error, HomeAssistantError, OSError, TimeoutError):
+                updated_data = self.data.copy()
+                updated_data.pop("light_bar", None)
+                self.async_set_updated_data(updated_data)
+                raise
 
     async def async_camera_stream_is_on(self) -> bool:
         """Return whether the panel's RTSP camera stream is enabled."""

@@ -1,0 +1,29 @@
+set_light_bar:
+  name: Set light bar
+  description: Control a connected USB RGB light bar over authenticated SSH.
+  fields:
+    entry_id:
+      name: Panel entry ID
+      description: Configuration entry ID of the Crestron panel.
+      required: true
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Turn the light bar on or off. Turning it off preserves color and brightness.
+      default: true
+      selector:
+        boolean:
+    rgb_color:
+      name: RGB color
+      description: Optional RGB color. Omit to keep the current color.
+      selector:
+        color_rgb:
+    brightness:
+      name: Brightness
+      description: Optional brightness from 0 to 255. Omit to keep the current brightness.
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
